@@ -253,7 +253,7 @@
       },
       "lazyStreamClose": {
         "label": "Giữ micro mở giữa các lần phiên âm",
-        "description": "Giữ luồng micro mở trong 30 giây sau khi dừng ghi âm, giảm độ trễ khi phiên âm liên tiếp. Có thể làm giảm chất lượng âm thanh Bluetooth khi đang hoạt động."
+        "description": "Giữ luồng micro mở trong 8 giờ sau khi dừng ghi âm, giảm độ trễ khi phiên âm liên tiếp. Có thể làm giảm chất lượng âm thanh Bluetooth khi đang hoạt động."
       },
       "acceleration": {
         "whisper": {

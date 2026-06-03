@@ -253,7 +253,7 @@
       },
       "lazyStreamClose": {
         "label": "Mikrofon zwischen Transkriptionen offen halten",
-        "description": "Hält den Mikrofon-Stream nach dem Aufnahmestopp 30 Sekunden lang offen, um die Latenz bei aufeinanderfolgenden Transkriptionen zu verringern. Kann die Bluetooth-Audioqualität beeinträchtigen."
+        "description": "Hält den Mikrofon-Stream nach dem Aufnahmestopp 8 Stunden lang offen, um die Latenz bei aufeinanderfolgenden Transkriptionen zu verringern. Kann die Bluetooth-Audioqualität beeinträchtigen."
       },
       "acceleration": {
         "whisper": {
