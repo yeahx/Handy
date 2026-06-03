@@ -341,9 +341,16 @@ jobs:
       # tries to codesign the macOS .app, sign Windows EXE, and sign
       # updater artifacts — all of which fail because the secrets are
       # empty strings (env vars can't be conditionally unset in GH
-      # Actions). Strip those config blocks at build time so tauri
-      # skips the signing paths entirely.
-      - name: Strip signing/updater config for unsigned build
+      # Actions). We:
+      #   1. jq away macOS/Windows code-signing config so tauri skips
+      #      those steps entirely
+      #   2. blank plugins.updater.endpoints so the built app never
+      #      tries to phone home for updates
+      #   3. generate a throwaway ed25519 keypair so tauri's bundler
+      #      can still sign the updater bundle (it refuses to build
+      #      otherwise) — the key is created fresh each CI run and
+      #      never used to authenticate real updates
+      - name: Strip signing config for unsigned build
         if: ${{ !inputs.sign-binaries }}
         shell: bash
         run: |
@@ -354,11 +361,33 @@ jobs:
             | del(.bundle.macOS.hardenedRuntime)
             | del(.bundle.macOS.entitlements)
             | del(.bundle.windows.signCommand)
-            | del(.plugins.updater)
+            | .plugins.updater.endpoints = []
           ' "$ORIG" > tmp.json && mv tmp.json "$ORIG"
           echo "::group::tauri.conf.json after stripping"
-          jq '.bundle.macOS, .bundle.windows, .plugins' "$ORIG"
+          jq '.bundle.macOS, .bundle.windows, .plugins.updater' "$ORIG"
           echo "::endgroup::"
+
+      - name: Generate throwaway tauri signing key for unsigned build
+        if: ${{ !inputs.sign-binaries }}
+        shell: bash
+        run: |
+          set -e
+          # Both the priv-key file and password live only inside this
+          # job. The matching pub-key is patched into tauri.conf.json
+          # so the bundler's pub/priv pair check passes; nobody will
+          # ever verify a real update against it.
+          KEY_DIR="$RUNNER_TEMP/tauri-dummy"
+          mkdir -p "$KEY_DIR"
+          bun tauri signer generate -p "" -w "$KEY_DIR/key" -f
+          PRIV=$(cat "$KEY_DIR/key")
+          PUB=$(cat "$KEY_DIR/key.pub")
+          jq --arg pk "$PUB" '.plugins.updater.pubkey = $pk' src-tauri/tauri.conf.json > tmp.json && mv tmp.json src-tauri/tauri.conf.json
+          # Stash to GITHUB_ENV; the next step reads it via env.
+          {
+            echo "FORK_DUMMY_TAURI_PRIVKEY<<__EOF__"
+            echo "$PRIV"
+            echo "__EOF__"
+          } >> "$GITHUB_ENV"
 
       - name: Build with Tauri
         uses: tauri-apps/tauri-action@v0
@@ -374,7 +403,7 @@ jobs:
           AZURE_CLIENT_ID: ${{ inputs.sign-binaries && secrets.AZURE_CLIENT_ID || '' }}
           AZURE_CLIENT_SECRET: ${{ inputs.sign-binaries && secrets.AZURE_CLIENT_SECRET || '' }}
           AZURE_TENANT_ID: ${{ inputs.sign-binaries && secrets.AZURE_TENANT_ID || '' }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ inputs.sign-binaries && secrets.TAURI_SIGNING_PRIVATE_KEY || '' }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ inputs.sign-binaries && secrets.TAURI_SIGNING_PRIVATE_KEY || env.FORK_DUMMY_TAURI_PRIVKEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ inputs.sign-binaries && secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD || '' }}
           # Disable -march=native and all SIMD instruction sets above SSE4.2 for
           # x86_64 builds. Without this, CPUs lacking AVX/FMA (e.g. Celeron N2920,
