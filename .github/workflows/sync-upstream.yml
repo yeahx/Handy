@@ -1,0 +1,193 @@
+name: "Sync upstream and release"
+
+# Fork-only automation. Rebases this fork's private patches on top of
+# the latest cjpais/Handy main, then kicks off a Release build. The
+# workflow STOPS the moment a patch fails to apply cleanly — when that
+# happens it opens (or comments on) an `upstream-sync-conflict` issue
+# and refuses to run again until that issue is closed. Trigger
+# manually from the Actions tab: "Sync upstream and release" → Run.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+  actions: write
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+env:
+  UPSTREAM_REPO: cjpais/Handy
+  UPSTREAM_BRANCH: main
+  CONFLICT_LABEL: upstream-sync-conflict
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    outputs:
+      synced: ${{ steps.replay.outputs.synced }}
+    steps:
+      - name: Refuse to run while a conflict issue is open
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: process.env.CONFLICT_LABEL,
+            });
+            if (data.length > 0) {
+              core.setFailed(
+                `Auto-sync is paused: open conflict issue #${data[0].number} ` +
+                `must be resolved and closed before the workflow can resume.`
+              );
+            }
+        env:
+          CONFLICT_LABEL: ${{ env.CONFLICT_LABEL }}
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.SYNC_BOT_TOKEN }}
+
+      - name: Configure git identity
+        run: |
+          git config user.name "yeahx-sync-bot"
+          git config user.email "lazyago@gmail.com"
+
+      - name: Fetch upstream
+        run: |
+          git remote add upstream "https://github.com/${UPSTREAM_REPO}.git"
+          git fetch upstream "${UPSTREAM_BRANCH}"
+
+      - name: Replay fork patches on upstream/${{ env.UPSTREAM_BRANCH }}
+        id: replay
+        run: |
+          set -euo pipefail
+
+          BASE=$(git merge-base HEAD "upstream/${UPSTREAM_BRANCH}")
+          UPSTREAM_HEAD=$(git rev-parse "upstream/${UPSTREAM_BRANCH}")
+
+          echo "merge-base = $BASE"
+          echo "upstream HEAD = $UPSTREAM_HEAD"
+          echo "fork HEAD     = $(git rev-parse HEAD)"
+
+          if [ "$BASE" = "$UPSTREAM_HEAD" ]; then
+            echo "::notice::Fork is already on top of upstream/${UPSTREAM_BRANCH}; nothing to do."
+            echo "synced=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          mkdir -p /tmp/fork-patches
+          rm -f /tmp/fork-patches/*.patch
+          git format-patch "$BASE"..HEAD -o /tmp/fork-patches/
+          PATCH_COUNT=$(ls /tmp/fork-patches/*.patch 2>/dev/null | wc -l | tr -d ' ')
+          echo "::notice::Captured ${PATCH_COUNT} fork patch(es) to replay."
+
+          git reset --hard "upstream/${UPSTREAM_BRANCH}"
+
+          if [ "$PATCH_COUNT" -gt 0 ]; then
+            if ! git am --3way /tmp/fork-patches/*.patch; then
+              # Try to collect a useful diff before aborting.
+              git status --short || true
+              git diff || true
+              git am --abort || true
+              echo "::error::git am failed — fork patches no longer apply on upstream/${UPSTREAM_BRANCH}."
+              exit 1
+            fi
+          fi
+
+          git push --force-with-lease origin "HEAD:${UPSTREAM_BRANCH}"
+          echo "synced=true" >> "$GITHUB_OUTPUT"
+          echo "::notice::Fork main is now rebased on $(git rev-parse --short upstream/${UPSTREAM_BRANCH}) with ${PATCH_COUNT} fork patch(es) replayed."
+
+      - name: Open / update conflict issue
+        if: failure() && steps.replay.conclusion == 'failure'
+        uses: actions/github-script@v7
+        env:
+          CONFLICT_LABEL: ${{ env.CONFLICT_LABEL }}
+        with:
+          script: |
+            const today = new Date().toISOString().slice(0, 10);
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const label = process.env.CONFLICT_LABEL;
+
+            const { data: open } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: label,
+            });
+
+            if (open.length) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: open[0].number,
+                body: `Sync attempt on **${today}** also failed. [Run logs](${runUrl}).`,
+              });
+              return;
+            }
+
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `Upstream sync conflict — ${today}`,
+              labels: [label],
+              body: [
+                `Auto-sync stopped because fork patches no longer apply on \`upstream/main\`.`,
+                ``,
+                `**The sync workflow is paused** until this issue is closed.`,
+                ``,
+                `## Resolve locally`,
+                ``,
+                '```bash',
+                'git fetch upstream main',
+                'git checkout main',
+                'git rebase upstream/main   # resolve conflicts here',
+                'git push --force-with-lease',
+                '```',
+                ``,
+                `Then close this issue and re-run the workflow.`,
+                ``,
+                `[See workflow run](${runUrl})`,
+              ].join('\n'),
+            });
+
+  release:
+    needs: sync
+    if: needs.sync.outputs.synced == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.SYNC_BOT_TOKEN }}
+
+      - name: Delete previous draft release with same version
+        env:
+          GH_TOKEN: ${{ secrets.SYNC_BOT_TOKEN }}
+        run: |
+          VERSION=$(grep -o '"version": "[^"]*"' src-tauri/tauri.conf.json | cut -d'"' -f4)
+          echo "Current version: v${VERSION}"
+          # If a draft release with this tag already exists, delete it so
+          # the Release workflow's create-release step can succeed.
+          if gh release view "v${VERSION}" --json isDraft -q .isDraft 2>/dev/null | grep -q true; then
+            echo "Deleting existing draft v${VERSION}..."
+            gh release delete "v${VERSION}" --yes
+          else
+            echo "No existing draft v${VERSION}; nothing to delete."
+          fi
+
+      - name: Trigger Release workflow
+        env:
+          GH_TOKEN: ${{ secrets.SYNC_BOT_TOKEN }}
+        run: |
+          gh workflow run release.yml --ref main
+          echo "::notice::Release workflow dispatched against refreshed main."
