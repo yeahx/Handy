@@ -253,7 +253,7 @@
       },
       "lazyStreamClose": {
         "label": "Transkripsiyonlar arasında mikrofonu açık tut",
-        "description": "Kayıt durdurulduktan sonra mikrofon akışını 30 saniye açık tutar, ardışık transkripsiyonlarda gecikmeyi azaltır. Etkinken Bluetooth ses kalitesini düşürebilir."
+        "description": "Kayıt durdurulduktan sonra mikrofon akışını 8 saat açık tutar, ardışık transkripsiyonlarda gecikmeyi azaltır. Etkinken Bluetooth ses kalitesini düşürebilir."
       },
       "acceleration": {
         "whisper": {

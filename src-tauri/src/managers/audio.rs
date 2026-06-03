@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::Manager;
 
-const STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
+const STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(8 * 60 * 60);
 
 fn set_mute(mute: bool) {
     // Expected behavior:
