@@ -378,7 +378,11 @@ jobs:
           # ever verify a real update against it.
           KEY_DIR="$RUNNER_TEMP/tauri-dummy"
           mkdir -p "$KEY_DIR"
-          bun tauri signer generate -p "" -w "$KEY_DIR/key" -f
+          # tauri signer's -p flag rejects empty strings ('a value is
+          # required for --password'), so use a literal dummy. The
+          # value is never used outside this job.
+          DUMMY_PWD="fork-build-unused"
+          bun tauri signer generate -p "$DUMMY_PWD" -w "$KEY_DIR/key" -f
           PRIV=$(cat "$KEY_DIR/key")
           PUB=$(cat "$KEY_DIR/key.pub")
           jq --arg pk "$PUB" '.plugins.updater.pubkey = $pk' src-tauri/tauri.conf.json > tmp.json && mv tmp.json src-tauri/tauri.conf.json
@@ -388,6 +392,7 @@ jobs:
             echo "$PRIV"
             echo "__EOF__"
           } >> "$GITHUB_ENV"
+          echo "FORK_DUMMY_TAURI_PRIVKEY_PWD=$DUMMY_PWD" >> "$GITHUB_ENV"
 
       - name: Build with Tauri
         uses: tauri-apps/tauri-action@v0
@@ -404,7 +409,7 @@ jobs:
           AZURE_CLIENT_SECRET: ${{ inputs.sign-binaries && secrets.AZURE_CLIENT_SECRET || '' }}
           AZURE_TENANT_ID: ${{ inputs.sign-binaries && secrets.AZURE_TENANT_ID || '' }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ inputs.sign-binaries && secrets.TAURI_SIGNING_PRIVATE_KEY || env.FORK_DUMMY_TAURI_PRIVKEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ inputs.sign-binaries && secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD || '' }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ inputs.sign-binaries && secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD || env.FORK_DUMMY_TAURI_PRIVKEY_PWD }}
           # Disable -march=native and all SIMD instruction sets above SSE4.2 for
           # x86_64 builds. Without this, CPUs lacking AVX/FMA (e.g. Celeron N2920,
           # FX-8350) crash with SIGILL. The Vulkan backend handles heavy compute
