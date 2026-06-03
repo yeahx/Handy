@@ -337,6 +337,29 @@ jobs:
             '.bundle.linux.deb.files["/usr/lib/libonnxruntime.so"] = $so | .bundle.linux.deb.files["/usr/lib/libonnxruntime.so.1"] = $so1 | .bundle.linux.deb.files["/usr/lib/libonnxruntime.so.1.24.2"] = $sov' \
             src-tauri/tauri.conf.json > tmp.json && mv tmp.json src-tauri/tauri.conf.json
 
+      # Fork-side patch: when sign-binaries is off, tauri's build still
+      # tries to codesign the macOS .app, sign Windows EXE, and sign
+      # updater artifacts — all of which fail because the secrets are
+      # empty strings (env vars can't be conditionally unset in GH
+      # Actions). Strip those config blocks at build time so tauri
+      # skips the signing paths entirely.
+      - name: Strip signing/updater config for unsigned build
+        if: ${{ !inputs.sign-binaries }}
+        shell: bash
+        run: |
+          set -e
+          ORIG=src-tauri/tauri.conf.json
+          jq '
+            del(.bundle.macOS.signingIdentity)
+            | del(.bundle.macOS.hardenedRuntime)
+            | del(.bundle.macOS.entitlements)
+            | del(.bundle.windows.signCommand)
+            | del(.plugins.updater)
+          ' "$ORIG" > tmp.json && mv tmp.json "$ORIG"
+          echo "::group::tauri.conf.json after stripping"
+          jq '.bundle.macOS, .bundle.windows, .plugins' "$ORIG"
+          echo "::endgroup::"
+
       - name: Build with Tauri
         uses: tauri-apps/tauri-action@v0
         env:
